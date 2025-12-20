@@ -10,54 +10,53 @@
 
     <!-- Header -->
     <header class="header">
-      <img src="../assets/icon.png" alt="FetchX" class="logo" />
-      <div class="title">
+      <img src="../assets/icon.png" class="logo" />
+      <div>
         <h1>FetchX</h1>
         <p>Download stock media at scale</p>
       </div>
     </header>
 
     <!-- Search -->
-    <div class="search-box">
+    <div class="search-section">
       <input
+        id="queryInput"
         type="text"
-        placeholder="Search stock media (e.g. mountains)"
-        disabled
+        placeholder="Search stock media (e.g. water)"
       />
-      <button disabled>Search</button>
+      <button id="searchBtn">Search</button>
     </div>
 
-    <!-- Media Type -->
+    <!-- Media type -->
     <div class="media-type">
-      <label for="mediaSelect">Media type</label>
-      <select id="mediaSelect">
+      <label for="mediaTypeSelect">Media type</label>
+      <select id="mediaTypeSelect">
         <option value="images" selected>Images</option>
         <option value="videos">Videos</option>
       </select>
     </div>
 
-    <!-- Providers -->
-    <div class="providers">
-      <div class="provider">
-        <span>Pexels</span>
-        <span class="count">—</span>
-      </div>
-      <div class="provider">
-        <span>Unsplash</span>
-        <span class="count">—</span>
-      </div>
-    </div>
+    <!-- Results -->
+    <div id="resultsSection" class="hidden">
+      <p class="results-text">
+        Results found: <span id="totalResults">—</span>
+      </p>
 
-    <!-- Actions -->
-    <div class="actions">
-      <button class="primary" disabled>
+      <input
+        id="countInput"
+        type="number"
+        min="1"
+        placeholder="How many do you want to download?"
+      />
+
+      <button id="downloadBtn" disabled>
         Download
       </button>
     </div>
 
-    <!-- Footer -->
+    <!-- Status -->
     <footer class="footer">
-      <span>Status: Idle</span>
+      <span id="statusText">Status: Idle</span>
     </footer>
 
   </div>

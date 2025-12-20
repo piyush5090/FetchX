@@ -1,140 +1,117 @@
+import { saveJob, loadJob, clearJob } from "./db.js";
+
 const BACKEND_URL = "https://fetchx-backend.onrender.com";
 
 console.log("FetchX background worker started");
 
-let currentJob = {
-  status: "idle",
-  query: null,
-  mediaType: "images",
-  page: 1,
-  perPage: 80,
-  totalFetched: 0,
-  metadata: [],
-};
+let currentJob = null;
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchPexelsImagesPage(query, page, perPage, attempt = 1) {
+async function fetchPage(query, page, perPage) {
   const url = `${BACKEND_URL}/metadata/pexels/images?query=${encodeURIComponent(
     query
   )}&page=${page}&perPage=${perPage}`;
 
-  try {
-    const res = await fetch(url);
+  const res = await fetch(url);
 
-    if (!res.ok) {
-      console.warn(
-        `Metadata fetch failed (status ${res.status}) on page ${page}, attempt ${attempt}`
-      );
-
-      // Retry up to 3 times
-      if (attempt < 3) {
-        await sleep(2000);
-        return fetchPexelsImagesPage(query, page, perPage, attempt + 1);
-      }
-
-      throw new Error(`Failed after retries (status ${res.status})`);
-    }
-
-    return res.json();
-  } catch (err) {
-    console.error("Fetch error:", err.message);
-
-    if (attempt < 3) {
-      await sleep(2000);
-      return fetchPexelsImagesPage(query, page, perPage, attempt + 1);
-    }
-
-    throw err;
+  if (res.status === 404) {
+    return { items: [] };
   }
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  return res.json();
 }
 
-function sendProgress() {
-  chrome.runtime.sendMessage({
-    type: "METADATA_PROGRESS",
-    payload: {
-      page: currentJob.page,
-      totalFetched: currentJob.totalFetched,
-    },
-  });
-}
-
-async function startMetadataLoop() {
-  console.log("Starting metadata pagination loop");
-
-  currentJob.status = "metadata";
-  currentJob.page = 1;
-  currentJob.totalFetched = 0;
-  currentJob.metadata = [];
+async function runMetadataLoop() {
+  console.log("Metadata loop started");
 
   while (true) {
-    console.log(`Fetching page ${currentJob.page}`);
+    try {
+    console.log(`[FetchX] Fetching page ${currentJob.page}`);
+      const data = await fetchPage(
+        currentJob.query,
+        currentJob.page,
+        currentJob.perPage
+      );
 
-    const data = await fetchPexelsImagesPage(
-      currentJob.query,
-      currentJob.page,
-      currentJob.perPage
-    );
+      if (!data.items || data.items.length === 0) {
+        console.log("Metadata complete");
+        await clearJob();
 
-    const items = data.items || [];
+        chrome.runtime.sendMessage({
+          type: "METADATA_DONE",
+          payload: { totalFetched: currentJob.totalFetched },
+        });
 
-    if (items.length === 0) {
-      console.log("No more metadata. Loop finished.");
-      break;
-    }
-
-    currentJob.metadata.push(...items);
-    currentJob.totalFetched += items.length;
-
-    sendProgress();
-
-    currentJob.page += 1;
-
-    // 🔹 IMPORTANT: throttle to protect Render
-    await sleep(500);
-  }
-
-  currentJob.status = "idle";
-
-  chrome.runtime.sendMessage({
-    type: "METADATA_DONE",
-    payload: {
-      totalFetched: currentJob.totalFetched,
-    },
-  });
-
-  console.log("Metadata loop complete");
-}
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch (message.type) {
-    case "PING":
-      sendResponse({ ok: true, status: currentJob.status });
-      break;
-
-    case "START_SEARCH":
-      currentJob.query = message.query;
-      currentJob.mediaType = message.mediaType;
-      sendResponse({ ok: true });
-      break;
-
-    case "START_METADATA":
-      if (currentJob.mediaType !== "images") {
-        sendResponse({ ok: false, error: "Only images supported" });
-        break;
+        return;
       }
 
-      startMetadataLoop().catch((err) => {
-        console.error("Metadata loop fatal error:", err);
+      currentJob.page += 1;
+      currentJob.totalFetched += data.items.length;
+
+      await saveJob(currentJob);
+
+      chrome.runtime.sendMessage({
+        type: "METADATA_PROGRESS",
+        payload: {
+          page: currentJob.page,
+          totalFetched: currentJob.totalFetched,
+        },
       });
 
-      sendResponse({ ok: true });
-      break;
+      await sleep(400);
+    } catch (err) {
+      console.warn("Worker paused:", err.message);
 
-    default:
-      sendResponse({ ok: false });
+      currentJob.status = "paused";
+      await saveJob(currentJob);
+
+      chrome.runtime.sendMessage({
+        type: "METADATA_PAUSED",
+        payload: {
+          page: currentJob.page,
+          totalFetched: currentJob.totalFetched,
+        },
+      });
+
+      return;
+    }
+  }
+}
+
+chrome.runtime.onMessage.addListener(async (msg, sender, sendResponse) => {
+  if (msg.type === "START_SEARCH") {
+    currentJob = {
+      status: "metadata",
+      query: msg.query,
+      mediaType: msg.mediaType,
+      page: 1,
+      perPage: 80,
+      totalFetched: 0,
+    };
+
+    await saveJob(currentJob);
+    sendResponse({ ok: true });
+  }
+
+  if (msg.type === "START_METADATA") {
+    const saved = await loadJob();
+    if (saved) currentJob = saved;
+
+    runMetadataLoop();
+    sendResponse({ ok: true });
+  }
+
+  if (msg.type === "RESET_JOB") {
+    await clearJob();
+    currentJob = null;
+    sendResponse({ ok: true });
   }
 
   return true;

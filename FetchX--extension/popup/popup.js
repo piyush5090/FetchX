@@ -1,83 +1,76 @@
 const BACKEND_URL = "https://fetchx-backend.onrender.com";
 
-// Elements
-const searchInput = document.querySelector(".search-box input");
-const searchButton = document.querySelector(".search-box button");
-const statusText = document.querySelector(".footer span");
-const mediaSelect = document.getElementById("mediaSelect");
-const providerRows = document.querySelectorAll(".provider");
+const queryInput = document.getElementById("queryInput");
+const searchBtn = document.getElementById("searchBtn");
+const mediaTypeSelect = document.getElementById("mediaTypeSelect");
 
-// Health check
-async function checkHealth() {
-  try {
-    const res = await fetch(`${BACKEND_URL}/health`);
-    if (!res.ok) throw new Error("Health check failed");
+const resultsSection = document.getElementById("resultsSection");
+const totalResultsEl = document.getElementById("totalResults");
+const countInput = document.getElementById("countInput");
+const downloadBtn = document.getElementById("downloadBtn");
+const statusText = document.getElementById("statusText");
 
-    statusText.textContent = "Status: Connected";
-    searchInput.disabled = false;
-    searchButton.disabled = false;
-  } catch (err) {
-    statusText.textContent = "Status: Backend offline";
-  }
-}
+let totalAvailable = 0;
 
-// Search handler
+// Search handler (DISCOVERY ONLY)
 async function handleSearch() {
-  const query = searchInput.value.trim();
-  const mediaType = mediaSelect.value;
+  const query = queryInput.value.trim();
+  const mediaType = mediaTypeSelect.value;
 
   if (!query) return;
 
-  statusText.textContent = "Status: Preparing metadata...";
-  searchButton.disabled = true;
+  statusText.textContent = "Status: Searching...";
+  searchBtn.disabled = true;
+  resultsSection.classList.add("hidden");
+  downloadBtn.disabled = true;
 
-  // Tell background about job
-  chrome.runtime.sendMessage(
-    {
-      type: "START_SEARCH",
-      query,
-      mediaType,
-    },
-    () => {}
-  );
+  try {
+    const res = await fetch(
+      `${BACKEND_URL}/search?query=${encodeURIComponent(query)}&type=${mediaType}`
+    );
 
-  // Start metadata loop
-  chrome.runtime.sendMessage(
-    {
-      type: "START_METADATA",
-    },
-    (response) => {
-      if (!response?.ok) {
-        statusText.textContent = "Status: Metadata error";
-      }
-    }
-  );
+    if (!res.ok) throw new Error("Search failed");
+
+    const data = await res.json();
+
+    totalAvailable = data.total || 0;
+    totalResultsEl.textContent = totalAvailable.toLocaleString();
+
+    resultsSection.classList.remove("hidden");
+    statusText.textContent = "Status: Ready";
+  } catch (err) {
+    console.error(err);
+    statusText.textContent = "Status: Error fetching results";
+  } finally {
+    searchBtn.disabled = false;
+  }
 }
 
-// Listen for progress from background
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === "METADATA_PROGRESS") {
-    statusText.textContent = `Metadata fetched: ${message.payload.totalFetched}`;
-  }
+// Enable download only when count is valid
+function handleCountChange() {
+  const value = Number(countInput.value);
 
-  if (message.type === "METADATA_DONE") {
-    statusText.textContent = `Metadata ready (${message.payload.totalFetched})`;
-    searchButton.disabled = false;
+  if (value > 0 && value <= totalAvailable) {
+    downloadBtn.disabled = false;
+  } else {
+    downloadBtn.disabled = true;
   }
-});
+}
+
+// Placeholder for next step
+function handleDownload() {
+  const query = queryInput.value.trim();
+  const count = Number(countInput.value);
+  const mediaType = mediaTypeSelect.value;
+
+  statusText.textContent = `Status: Download requested (${count})`;
+  console.log("Download intent:", { query, mediaType, count });
+}
 
 // Events
-searchButton.addEventListener("click", handleSearch);
-searchInput.addEventListener("keydown", (e) => {
+searchBtn.addEventListener("click", handleSearch);
+queryInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") handleSearch();
 });
-
-// Init
-checkHealth();
-
-// Background ping
-chrome.runtime.sendMessage({ type: "PING" }, (response) => {
-  if (response?.ok) {
-    console.log("Background connected:", response.status);
-  }
-});
+countInput.addEventListener("input", handleCountChange);
+downloadBtn.addEventListener("click", handleDownload);
