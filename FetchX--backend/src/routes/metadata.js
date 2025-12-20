@@ -10,7 +10,7 @@ const router = express.Router();
 /**
  * GET /metadata/images?query=mountains&page=1&perPage=30
  */
-router.get("/images", async (req, res) => {
+router.get("/pexels/images", async (req, res) => {
   const { query, page = 1, perPage = 30 } = req.query;
 
   if (!query) {
@@ -39,7 +39,7 @@ router.get("/images", async (req, res) => {
 /**
  * GET /metadata/videos?query=mountains&page=1&perPage=30
  */
-router.get("/videos", async (req, res) => {
+router.get("/pexels/videos", async (req, res) => {
   const { query, page = 1, perPage = 30 } = req.query;
 
   if (!query) {
