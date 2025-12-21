@@ -1,76 +1,122 @@
-const BACKEND_URL = "https://fetchx-backend.onrender.com";
+console.log("POPUP LOADED");
 
+// const BACKEND_URL = "https://fetchx-backend.onrender.com";
+const BACKEND_URL = "http://localhost:3000";
+
+/* DOM */
 const queryInput = document.getElementById("queryInput");
 const searchBtn = document.getElementById("searchBtn");
 const mediaTypeSelect = document.getElementById("mediaTypeSelect");
 
 const resultsSection = document.getElementById("resultsSection");
-const totalResultsEl = document.getElementById("totalResults");
+const providerResults = document.getElementById("providerResults");
+const maxLimitEl = document.getElementById("maxLimit");
+
 const countInput = document.getElementById("countInput");
 const downloadBtn = document.getElementById("downloadBtn");
 const statusText = document.getElementById("statusText");
 
-let totalAvailable = 0;
+const progressSection = document.getElementById("progressSection");
+const progressTotal = document.getElementById("progressTotal");
+const progressProviders = document.getElementById("progressProviders");
 
-// Search handler (DISCOVERY ONLY)
+/* State */
+let maxDownloadLimit = 0;
+
+/* Search */
 async function handleSearch() {
   const query = queryInput.value.trim();
-  const mediaType = mediaTypeSelect.value;
-
+  const type = mediaTypeSelect.value;
   if (!query) return;
 
   statusText.textContent = "Status: Searching...";
   searchBtn.disabled = true;
   resultsSection.classList.add("hidden");
+  progressSection.classList.add("hidden");
+  providerResults.innerHTML = "";
+  countInput.value = "";
   downloadBtn.disabled = true;
 
   try {
     const res = await fetch(
-      `${BACKEND_URL}/search?query=${encodeURIComponent(query)}&type=${mediaType}`
+      `${BACKEND_URL}/search?query=${encodeURIComponent(query)}&type=${type}`
     );
-
-    if (!res.ok) throw new Error("Search failed");
-
     const data = await res.json();
 
-    totalAvailable = data.total || 0;
-    totalResultsEl.textContent = totalAvailable.toLocaleString();
+    maxDownloadLimit = data.maxDownloadLimit || 0;
+    maxLimitEl.textContent = maxDownloadLimit.toLocaleString();
+
+    Object.entries(data.providers).forEach(([name, info]) => {
+      const row = document.createElement("div");
+      row.className = "provider-row";
+
+      row.innerHTML = `
+        <span>${name.charAt(0).toUpperCase() + name.slice(1)}</span>
+        <span>${
+          info.available !== info.usable
+            ? `${info.available.toLocaleString()} (usable: ${info.usable.toLocaleString()})`
+            : info.available.toLocaleString()
+        }</span>
+      `;
+
+      providerResults.appendChild(row);
+    });
 
     resultsSection.classList.remove("hidden");
     statusText.textContent = "Status: Ready";
-  } catch (err) {
-    console.error(err);
-    statusText.textContent = "Status: Error fetching results";
+  } catch (e) {
+    statusText.textContent = "Status: Search failed";
   } finally {
     searchBtn.disabled = false;
   }
 }
 
-// Enable download only when count is valid
-function handleCountChange() {
-  const value = Number(countInput.value);
-
-  if (value > 0 && value <= totalAvailable) {
-    downloadBtn.disabled = false;
-  } else {
-    downloadBtn.disabled = true;
+/* Count input */
+countInput.addEventListener("input", () => {
+  let v = Number(countInput.value);
+  if (v > maxDownloadLimit) {
+    countInput.value = maxDownloadLimit;
+    v = maxDownloadLimit;
   }
-}
-
-// Placeholder for next step
-function handleDownload() {
-  const query = queryInput.value.trim();
-  const count = Number(countInput.value);
-  const mediaType = mediaTypeSelect.value;
-
-  statusText.textContent = `Status: Download requested (${count})`;
-  console.log("Download intent:", { query, mediaType, count });
-}
-
-// Events
-searchBtn.addEventListener("click", handleSearch);
-queryInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") handleSearch();
+  downloadBtn.disabled = !(v > 0 && v <= maxDownloadLimit);
 });
-countInput.addEventListener("input", handleCountChange);
-downloadBtn.addEventListener("click", handleDownload);
+
+/* Download */
+downloadBtn.addEventListener("click", () => {
+  const targetCount = Number(countInput.value);
+
+  chrome.runtime.sendMessage(
+    {
+      type: "CREATE_JOB",
+      query: queryInput.value.trim(),
+      mediaType: mediaTypeSelect.value,
+      targetCount,
+    },
+    () => {
+      statusText.textContent = "Status: Downloading...";
+      progressSection.classList.remove("hidden");
+    }
+  );
+});
+
+/* Progress listener */
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "PROGRESS") {
+    progressTotal.textContent = `Total: ${msg.downloaded}/${msg.target}`;
+    progressProviders.innerHTML = "";
+
+    Object.entries(msg.providers).forEach(([name, p]) => {
+      const row = document.createElement("div");
+      row.textContent = `${name}: ${p.downloaded} downloaded (${p.remaining} left)`;
+      progressProviders.appendChild(row);
+    });
+  }
+
+  if (msg.type === "DONE") {
+    statusText.textContent = "Status: Completed 🎉";
+  }
+});
+
+/* Events */
+searchBtn.addEventListener("click", handleSearch);
+queryInput.addEventListener("keydown", (e) => e.key === "Enter" && handleSearch());

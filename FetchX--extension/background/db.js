@@ -22,7 +22,10 @@ export async function saveJob(job) {
   const db = await openDB();
   const tx = db.transaction(STORE, "readwrite");
   tx.objectStore(STORE).put({ id: "current", ...job });
-  return tx.complete;
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 export async function loadJob() {
@@ -40,5 +43,8 @@ export async function clearJob() {
   const db = await openDB();
   const tx = db.transaction(STORE, "readwrite");
   tx.objectStore(STORE).delete("current");
-  return tx.complete;
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
 }

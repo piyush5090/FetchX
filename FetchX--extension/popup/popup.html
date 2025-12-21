@@ -22,14 +22,14 @@
       <input
         id="queryInput"
         type="text"
-        placeholder="Search stock media (e.g. water)"
+        placeholder="Search stock media (e.g. mountains)"
       />
       <button id="searchBtn">Search</button>
     </div>
 
     <!-- Media type -->
     <div class="media-type">
-      <label for="mediaTypeSelect">Media type</label>
+      <label>Media type</label>
       <select id="mediaTypeSelect">
         <option value="images" selected>Images</option>
         <option value="videos">Videos</option>
@@ -38,9 +38,12 @@
 
     <!-- Results -->
     <div id="resultsSection" class="hidden">
-      <p class="results-text">
-        Results found: <span id="totalResults">—</span>
-      </p>
+      <div class="results-header">
+        <span>Max downloadable</span>
+        <strong id="maxLimit">—</strong>
+      </div>
+
+      <div id="providerResults" class="provider-results"></div>
 
       <input
         id="countInput"
@@ -49,9 +52,16 @@
         placeholder="How many do you want to download?"
       />
 
-      <button id="downloadBtn" disabled>
-        Download
-      </button>
+      <button id="downloadBtn" disabled>Start Download</button>
+    </div>
+
+    <!-- Progress -->
+    <div id="progressSection" class="hidden">
+      <p class="progress-title">Download Progress</p>
+
+      <div id="progressTotal" class="progress-total">—</div>
+
+      <div id="progressProviders" class="progress-providers"></div>
     </div>
 
     <!-- Status -->

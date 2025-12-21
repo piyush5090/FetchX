@@ -1,118 +1,160 @@
-import { saveJob, loadJob, clearJob } from "./db.js";
+console.log("WORKER LOADED");
 
-const BACKEND_URL = "https://fetchx-backend.onrender.com";
+const BACKEND_URL = "http://localhost:3000";
 
-console.log("FetchX background worker started");
+const UNSPLASH_MAX_PAGES = 125;
+const UNSPLASH_PER_PAGE = 30;
+const PIXABAY_MAX_ITEMS = 500;
 
 let currentJob = null;
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+/* helpers */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function normalizeMediaType(mediaType) {
+  const t = mediaType?.toLowerCase();
+  if (["image", "images", "photos"].includes(t)) return "images";
+  if (["video", "videos"].includes(t)) return "videos";
+  if (t === "illustrations") return "illustrations";
+  if (t === "vectors") return "vectors";
+  return null;
 }
 
-async function fetchPage(query, page, perPage) {
-  const url = `${BACKEND_URL}/metadata/pexels/images?query=${encodeURIComponent(
-    query
-  )}&page=${page}&perPage=${perPage}`;
-
-  const res = await fetch(url);
-
-  if (res.status === 404) {
-    return { items: [] };
+function resolveRoute(provider, mediaType) {
+  if (provider === "pexels") return mediaType;
+  if (provider === "unsplash" && mediaType === "images") return "images";
+  if (provider === "pixabay") {
+    if (mediaType === "videos") return "videos";
+    return "photos";
   }
+  return null;
+}
 
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-
+async function fetchMetadata({ provider, route, query, page, perPage }) {
+  const res = await fetch(
+    `${BACKEND_URL}/metadata/${provider}/${route}?query=${encodeURIComponent(
+      query
+    )}&page=${page}&perPage=${perPage}`
+  );
+  if (!res.ok) throw new Error(res.status);
   return res.json();
 }
 
-async function runMetadataLoop() {
-  console.log("Metadata loop started");
-
-  while (true) {
-    try {
-    console.log(`[FetchX] Fetching page ${currentJob.page}`);
-      const data = await fetchPage(
-        currentJob.query,
-        currentJob.page,
-        currentJob.perPage
-      );
-
-      if (!data.items || data.items.length === 0) {
-        console.log("Metadata complete");
-        await clearJob();
-
-        chrome.runtime.sendMessage({
-          type: "METADATA_DONE",
-          payload: { totalFetched: currentJob.totalFetched },
-        });
-
-        return;
-      }
-
-      currentJob.page += 1;
-      currentJob.totalFetched += data.items.length;
-
-      await saveJob(currentJob);
-
-      chrome.runtime.sendMessage({
-        type: "METADATA_PROGRESS",
-        payload: {
-          page: currentJob.page,
-          totalFetched: currentJob.totalFetched,
+function emitProgress(providers, downloaded, target) {
+  chrome.runtime.sendMessage({
+    type: "PROGRESS",
+    downloaded,
+    target,
+    providers: Object.fromEntries(
+      providers.map((p) => [
+        p.name,
+        {
+          downloaded: p.downloaded,
+          remaining: p.remaining,
         },
-      });
-
-      await sleep(400);
-    } catch (err) {
-      console.warn("Worker paused:", err.message);
-
-      currentJob.status = "paused";
-      await saveJob(currentJob);
-
-      chrome.runtime.sendMessage({
-        type: "METADATA_PAUSED",
-        payload: {
-          page: currentJob.page,
-          totalFetched: currentJob.totalFetched,
-        },
-      });
-
-      return;
-    }
-  }
+      ])
+    ),
+  });
 }
 
-chrome.runtime.onMessage.addListener(async (msg, sender, sendResponse) => {
-  if (msg.type === "START_SEARCH") {
-    currentJob = {
-      status: "metadata",
-      query: msg.query,
-      mediaType: msg.mediaType,
+/* execution */
+async function runJob() {
+  const mediaType = normalizeMediaType(currentJob.mediaType);
+
+  const providers = [
+    {
+      name: "pexels",
+      enabled: true,
       page: 1,
-      perPage: 80,
-      totalFetched: 0,
-    };
+      perPage: mediaType === "videos" ? 30 : 80,
+      remaining: Infinity,
+      downloaded: 0,
+    },
+    {
+      name: "unsplash",
+      enabled: mediaType === "images",
+      page: 1,
+      perPage: UNSPLASH_PER_PAGE,
+      remaining: UNSPLASH_MAX_PAGES * UNSPLASH_PER_PAGE,
+      downloaded: 0,
+    },
+    {
+      name: "pixabay",
+      enabled: true,
+      page: 1,
+      perPage: mediaType === "videos" ? 50 : 80,
+      remaining: PIXABAY_MAX_ITEMS,
+      downloaded: 0,
+    },
+  ];
 
-    await saveJob(currentJob);
-    sendResponse({ ok: true });
+  let downloaded = 0;
+
+  while (downloaded < currentJob.targetCount) {
+    let active = false;
+
+    for (const p of providers) {
+      if (!p.enabled || p.remaining <= 0) continue;
+
+      const route = resolveRoute(p.name, mediaType);
+      if (!route) {
+        p.enabled = false;
+        continue;
+      }
+
+      if (p.name === "unsplash" && p.page > UNSPLASH_MAX_PAGES) {
+        p.enabled = false;
+        continue;
+      }
+
+      let data;
+      try {
+        data = await fetchMetadata({
+          provider: p.name,
+          route,
+          query: currentJob.query,
+          page: p.page,
+          perPage: p.perPage,
+        });
+      } catch {
+        p.enabled = false;
+        continue;
+      }
+
+      if (!data.items?.length) {
+        p.enabled = false;
+        continue;
+      }
+
+      active = true;
+
+      for (const _ of data.items) {
+        if (downloaded >= currentJob.targetCount || p.remaining <= 0) break;
+
+        downloaded++;
+        p.downloaded++;
+        p.remaining--;
+
+        emitProgress(providers, downloaded, currentJob.targetCount);
+        await sleep(6);
+      }
+
+      p.page++;
+      await sleep(120);
+    }
+
+    if (!active) break;
   }
 
-  if (msg.type === "START_METADATA") {
-    const saved = await loadJob();
-    if (saved) currentJob = saved;
+  chrome.runtime.sendMessage({ type: "DONE" });
+}
 
-    runMetadataLoop();
+/* messaging */
+chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
+  if (msg.type === "CREATE_JOB") {
+    currentJob = msg;
     sendResponse({ ok: true });
+    runJob();
+    return true;
   }
-
-  if (msg.type === "RESET_JOB") {
-    await clearJob();
-    currentJob = null;
-    sendResponse({ ok: true });
-  }
-
-  return true;
 });

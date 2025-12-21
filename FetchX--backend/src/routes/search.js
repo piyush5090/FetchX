@@ -1,49 +1,83 @@
 import express from "express";
 import { getPexelsCounts } from "../services/pexels.js";
 import { getUnsplashCount } from "../services/unsplash.js";
+import { getPixabayCount } from "../services/pixabay.js";
 
 const router = express.Router();
 
+/* Provider limits */
+const UNSPLASH_MAX_PAGES = 125;
+const UNSPLASH_PER_PAGE = 30;
+const PIXABAY_MAX_ITEMS = 500;
+
 /**
- * GET /search?query=mountains&type=images|videos
+ * GET /search?query=mountains&type=images
  */
 router.get("/", async (req, res) => {
-  const { query, type } = req.query;
+  const { query, type = "images" } = req.query;
 
   if (!query) {
     return res.status(400).json({ error: "query is required" });
   }
 
-  // default to images if not provided
-  const mediaType = type === "videos" ? "videos" : "images";
-
   try {
-    // Fetch counts in parallel
-    const [pexels, unsplash] = await Promise.all([
-      getPexelsCounts(query),
-      mediaType === "images" ? getUnsplashCount(query) : Promise.resolve(null),
+    /* ---------- RAW COUNTS ---------- */
+
+    const [pexels, unsplash, pixabay] = await Promise.all([
+      getPexelsCounts(query, type),
+      type === "images"
+        ? getUnsplashCount(query)
+        : Promise.resolve({ images: 0 }),
+      getPixabayCount(query, type),
     ]);
 
-    let total = 0;
+    /* ---------- NORMALIZATION ---------- */
 
-    if (mediaType === "images") {
-      total =
-        (pexels?.images || 0) +
-        (unsplash?.images || 0);
-    }
+    const pexelsAvailable = pexels?.[type] || 0;
+    const pexelsUsable = pexelsAvailable; // no cap
 
-    if (mediaType === "videos") {
-      total = pexels?.videos || 0;
-    }
+    const unsplashAvailable = unsplash?.images || 0;
+    const unsplashCap = UNSPLASH_MAX_PAGES * UNSPLASH_PER_PAGE;
+    const unsplashUsable = Math.min(unsplashAvailable, unsplashCap);
+
+    const pixabayAvailable = pixabay || 0;
+    const pixabayUsable = Math.min(pixabayAvailable, PIXABAY_MAX_ITEMS);
+
+    const maxDownloadLimit =
+      pexelsUsable + unsplashUsable + pixabayUsable;
+
+    /* ---------- RESPONSE (UI + ENGINE SAFE) ---------- */
 
     res.json({
       query,
-      mediaType,
-      total,
+      mediaType: type,
+      maxDownloadLimit,
+
+      providers: {
+        pexels: {
+          images: pexelsUsable,
+          available: pexelsAvailable,
+          usable: pexelsUsable,
+        },
+
+        unsplash: {
+          images: unsplashUsable,
+          available: unsplashAvailable,
+          usable: unsplashUsable,
+          cap: `${UNSPLASH_MAX_PAGES} pages`,
+        },
+
+        pixabay: {
+          images: pixabayUsable,
+          available: pixabayAvailable,
+          usable: pixabayUsable,
+          cap: `${PIXABAY_MAX_ITEMS} items`,
+        },
+      },
     });
   } catch (err) {
     console.error("Search error:", err.message);
-    res.status(500).json({ error: "Failed to fetch counts" });
+    res.status(500).json({ error: "Failed to fetch search counts" });
   }
 });
 

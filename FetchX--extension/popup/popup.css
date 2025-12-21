@@ -85,13 +85,32 @@ body {
   border: none;
   border-radius: 6px;
   padding: 6px 8px;
-  font-size: 13px;
 }
 
 /* Results */
-.results-text {
+.results-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
   font-size: 14px;
-  margin-bottom: 8px;
+}
+
+.provider-results {
+  background: #020617;
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.provider-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.provider-row span:last-child {
+  color: #94a3b8;
 }
 
 #countInput {
@@ -114,6 +133,23 @@ body {
   font-weight: 700;
 }
 
+/* Progress */
+.progress-title {
+  font-size: 14px;
+  margin: 12px 0 6px;
+}
+
+.progress-total {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.progress-providers div {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 3px;
+}
+
 /* Footer */
 .footer {
   margin-top: 12px;
@@ -125,4 +161,4 @@ body {
 /* Utilities */
 .hidden {
   display: none;
-}
+} 
