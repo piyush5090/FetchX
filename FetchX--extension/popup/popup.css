@@ -1,6 +1,6 @@
 * {
   box-sizing: border-box;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: system-ui, sans-serif;
 }
 
 body {
@@ -14,12 +14,10 @@ body {
   padding: 14px;
 }
 
-/* Header */
 .header {
   display: flex;
-  align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .logo {
@@ -38,23 +36,24 @@ body {
   color: #94a3b8;
 }
 
-/* Search */
 .search-section {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
 }
 
-.search-section input {
+.search-section input,
+#countInput {
   flex: 1;
   padding: 8px;
-  border-radius: 6px;
-  border: none;
   background: #1e293b;
-  color: #e5e7eb;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
 }
 
-.search-section button {
+.search-section button,
+#downloadBtn {
   padding: 8px 12px;
   border-radius: 6px;
   border: none;
@@ -63,102 +62,73 @@ body {
   font-weight: 600;
 }
 
-/* Media type */
 .media-type {
   display: flex;
   justify-content: space-between;
-  align-items: center;
   background: #020617;
-  padding: 8px 10px;
-  border-radius: 8px;
-  margin-bottom: 12px;
-}
-
-.media-type label {
-  font-size: 13px;
-  color: #cbd5f5;
+  padding: 8px;
+  border-radius: 6px;
+  margin-bottom: 10px;
 }
 
 .media-type select {
   background: #1e293b;
-  color: #e5e7eb;
+  color: white;
   border: none;
   border-radius: 6px;
-  padding: 6px 8px;
-}
-
-/* Results */
-.results-header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 6px;
-  font-size: 14px;
+  padding: 6px;
 }
 
 .provider-results {
   background: #020617;
-  border-radius: 8px;
   padding: 8px;
-  margin-bottom: 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
 }
 
 .provider-row {
   display: flex;
   justify-content: space-between;
   font-size: 13px;
-  padding: 4px 0;
 }
 
-.provider-row span:last-child {
+#progressProviders div {
+  font-size: 12px;
   color: #94a3b8;
 }
 
-#countInput {
-  width: 100%;
-  padding: 8px;
-  border-radius: 6px;
-  border: none;
-  background: #1e293b;
-  color: #e5e7eb;
-  margin-bottom: 10px;
+#controlSection {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
-#downloadBtn {
-  width: 100%;
-  padding: 10px;
-  border-radius: 8px;
+#pauseBtn {
+  flex: 1;
+  background: #f59e0b;
   border: none;
-  background: linear-gradient(135deg, #22c55e, #16a34a);
+  padding: 8px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+#stopBtn {
+  flex: 1;
+  background: #ef4444;
+  border: none;
+  padding: 8px;
+  border-radius: 6px;
   color: white;
   font-weight: 700;
 }
 
-/* Progress */
-.progress-title {
-  font-size: 14px;
-  margin: 12px 0 6px;
-}
-
-.progress-total {
-  font-size: 13px;
-  margin-bottom: 6px;
-}
-
-.progress-providers div {
-  font-size: 12px;
-  color: #94a3b8;
-  margin-bottom: 3px;
-}
-
-/* Footer */
 .footer {
-  margin-top: 12px;
+  margin-top: 10px;
   text-align: center;
   font-size: 11px;
   color: #94a3b8;
 }
 
-/* Utilities */
 .hidden {
   display: none;
-} 
+}

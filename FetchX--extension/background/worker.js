@@ -1,43 +1,71 @@
 console.log("FETCHX WORKER LOADED");
 
-//const BACKEND_URL = "http://localhost:3000";
 const BACKEND_URL = "https://fetchx-backend.onrender.com";
 
-/* ---------- LIMITS ---------- */
+/* ================= CONSTANTS ================= */
+const STORAGE_KEY = "fetchxJob";
+const MAX_RETRIES = 3;
+
 const UNSPLASH_MAX_PAGES = 125;
 const UNSPLASH_PER_PAGE = 30;
 const PIXABAY_MAX_ITEMS = 500;
 
-/* ---------- STATE ---------- */
-let currentJob = null;
-let cancelled = false;
+/* ================= STATE ================= */
+let job = null;
+let providers = [];
+let totalDownloaded = 0;
 
-/* ---------- HELPERS ---------- */
+let stopRequested = false;
+let isRunning = false;
+let providerIndex = 0;
+
+/* ================= HELPERS ================= */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function normalizeMediaType(type) {
-  if (["images", "image", "photos"].includes(type)) return "images";
-  if (["videos", "video"].includes(type)) return "videos";
-  return null;
+/* ================= STORAGE ================= */
+async function persistState(reason = null) {
+  if (!job) return;
+
+  await chrome.storage.session.set({
+    [STORAGE_KEY]: {
+      job: structuredClone(job),
+      providers: structuredClone(providers),
+      totalDownloaded,
+      status: stopRequested ? "paused" : "running",
+      pauseReason: reason,
+      providerIndex,
+      savedAt: Date.now(),
+    },
+  });
+}
+
+async function loadState() {
+  const res = await chrome.storage.session.get(STORAGE_KEY);
+  return res[STORAGE_KEY] || null;
+}
+
+async function clearState() {
+  await chrome.storage.session.remove(STORAGE_KEY);
+}
+
+/* ================= NORMALIZATION ================= */
+function normalizeType(type) {
+  return type === "videos" ? "videos" : "images";
 }
 
 function resolveRoute(provider, mediaType) {
   if (provider === "pexels") return mediaType;
-  if (provider === "unsplash" && mediaType === "images") return "images";
-  if (provider === "pixabay") return mediaType === "videos" ? "videos" : "photos";
-  return null;
+  if (provider === "unsplash") return "images";
+  if (provider === "pixabay")
+    return mediaType === "videos" ? "videos" : "photos";
 }
 
 function extractUrl(provider, item) {
-  if (provider === "pexels") {
+  if (provider === "pexels")
     return item.src?.original || item.video_files?.[0]?.link;
-  }
-  if (provider === "unsplash") {
-    return item.urls?.full;
-  }
-  if (provider === "pixabay") {
+  if (provider === "unsplash") return item.urls?.full;
+  if (provider === "pixabay")
     return item.largeImageURL || item.videos?.large?.url;
-  }
   return null;
 }
 
@@ -46,77 +74,48 @@ function buildFilename(query, provider, item, mediaType) {
   return `${query}/${provider}/${provider}_${item.id}.${ext}`;
 }
 
-/* ---------- SAFE DOWNLOAD (NO FREEZE) ---------- */
-function downloadFileSequential(url, filename, retries = 2) {
+/* ================= DOWNLOAD ================= */
+function downloadOnce(url, filename) {
   return new Promise((resolve) => {
-    const attempt = (left) => {
-      let finished = false;
+    chrome.downloads.download(
+      { url, filename, saveAs: false, conflictAction: "uniquify" },
+      (id) => {
+        if (!id) return resolve(false);
 
-      chrome.downloads.download(
-        {
-          url,
-          filename,
-          saveAs: false,
-          conflictAction: "uniquify",
-        },
-        (downloadId) => {
-          if (!downloadId) {
-            if (left > 0) return attempt(left - 1);
-            return resolve(false);
+        const listener = (d) => {
+          if (d.id !== id) return;
+
+          if (d.state?.current === "complete") {
+            chrome.downloads.onChanged.removeListener(listener);
+            resolve(true);
           }
 
-          const timeout = setTimeout(() => {
-            if (!finished) {
-              finished = true;
-              chrome.downloads.onChanged.removeListener(listener);
-              resolve(true); // assume success
-            }
-          }, 8000); // ⏱️ HARD SAFETY TIMEOUT
+          if (d.state?.current === "interrupted") {
+            chrome.downloads.onChanged.removeListener(listener);
+            resolve(false);
+          }
+        };
 
-          const listener = (delta) => {
-            if (delta.id !== downloadId) return;
-
-            if (delta.state?.current === "complete") {
-              clearTimeout(timeout);
-              finished = true;
-              chrome.downloads.onChanged.removeListener(listener);
-              resolve(true);
-            }
-
-            if (delta.state?.current === "interrupted") {
-              clearTimeout(timeout);
-              chrome.downloads.onChanged.removeListener(listener);
-              if (left > 0) return attempt(left - 1);
-              resolve(false);
-            }
-          };
-
-          chrome.downloads.onChanged.addListener(listener);
-        }
-      );
-    };
-
-    attempt(retries);
+        chrome.downloads.onChanged.addListener(listener);
+      }
+    );
   });
 }
 
-/* ---------- BACKEND METADATA ---------- */
-async function fetchMetadata(provider, route, query, page, perPage) {
-  const res = await fetch(
-    `${BACKEND_URL}/metadata/${provider}/${route}?query=${encodeURIComponent(
-      query
-    )}&page=${page}&perPage=${perPage}`
-  );
-  if (!res.ok) throw new Error(res.status);
-  return res.json();
+async function downloadWithRetry(url, filename) {
+  for (let i = 1; i <= MAX_RETRIES; i++) {
+    if (await downloadOnce(url, filename)) return true;
+    await sleep(400 * i);
+  }
+  return false;
 }
 
-/* ---------- PROGRESS ---------- */
-function emitProgress(providers, total, target) {
+/* ================= PROGRESS ================= */
+function emitProgress() {
   chrome.runtime.sendMessage({
     type: "PROGRESS",
-    downloaded: total,
-    target,
+    downloaded: totalDownloaded,
+    target: job.targetCount,
     providers: Object.fromEntries(
       providers.map((p) => [
         p.name,
@@ -126,123 +125,151 @@ function emitProgress(providers, total, target) {
   });
 }
 
-/* ---------- MAIN EXECUTION ---------- */
-async function runJob() {
-  cancelled = false;
+/* ================= MAIN LOOP ================= */
+async function run() {
+  if (isRunning || !job) return;
 
-  const mediaType = normalizeMediaType(currentJob.mediaType);
-  const query = currentJob.query;
-  const target = currentJob.targetCount;
+  isRunning = true;
+  stopRequested = false;
 
-  const providers = [
-    {
-      name: "pexels",
-      enabled: true,
-      page: 1,
-      perPage: mediaType === "videos" ? 30 : 80,
-      remaining: Infinity,
-      downloaded: 0,
-    },
-    {
-      name: "unsplash",
-      enabled: mediaType === "images",
-      page: 1,
-      perPage: UNSPLASH_PER_PAGE,
-      remaining: UNSPLASH_MAX_PAGES * UNSPLASH_PER_PAGE,
-      downloaded: 0,
-    },
-    {
-      name: "pixabay",
-      enabled: true,
-      page: 1,
-      perPage: mediaType === "videos" ? 50 : 80,
-      remaining: PIXABAY_MAX_ITEMS,
-      downloaded: 0,
-    },
-  ];
+  const mediaType = normalizeType(job.mediaType);
+  await persistState();
 
-  let totalDownloaded = 0;
+  while (totalDownloaded < job.targetCount && !stopRequested) {
+    const activeProviders = providers.filter(
+      (p) => p.enabled && p.remaining > 0
+    );
 
-  while (totalDownloaded < target && !cancelled) {
-    let active = false;
+    if (activeProviders.length === 0) break;
 
-    for (const p of providers) {
-      if (!p.enabled || p.remaining <= 0) continue;
+    const p = providers[providerIndex % providers.length];
+    providerIndex = (providerIndex + 1) % providers.length;
 
-      const route = resolveRoute(p.name, mediaType);
-      if (!route) {
-        p.enabled = false;
-        continue;
-      }
+    if (!p.enabled || p.remaining <= 0) continue;
 
-      if (p.name === "unsplash" && p.page > UNSPLASH_MAX_PAGES) {
-        p.enabled = false;
-        continue;
-      }
-
-      let data;
-      try {
-        data = await fetchMetadata(
-          p.name,
-          route,
-          query,
-          p.page,
-          p.perPage
-        );
-      } catch {
-        p.enabled = false;
-        continue;
-      }
-
-      if (!data.items?.length) {
-        p.enabled = false;
-        continue;
-      }
-
-      active = true;
-
-      for (const item of data.items) {
-        if (totalDownloaded >= target || p.remaining <= 0 || cancelled) break;
-
-        const url = extractUrl(p.name, item);
-        if (!url) continue;
-
-        const filename = buildFilename(query, p.name, item, mediaType);
-
-        const success = await downloadFileSequential(url, filename);
-
-        if (success) {
-          totalDownloaded++;
-          p.downloaded++;
-          p.remaining--;
-          emitProgress(providers, totalDownloaded, target);
-        }
-
-        await sleep(150); // ✅ prevents Chrome throttling
-      }
-
-      p.page++;
-      await sleep(300);
+    // HARD CAPS
+    if (p.name === "unsplash" && p.page > UNSPLASH_MAX_PAGES) {
+      p.enabled = false;
+      continue;
     }
 
-    if (!active) break;
+    if (p.name === "pixabay" && p.downloaded >= PIXABAY_MAX_ITEMS) {
+      p.enabled = false;
+      continue;
+    }
+
+    let data;
+    try {
+      const res = await fetch(
+        `${BACKEND_URL}/metadata/${p.name}/${resolveRoute(
+          p.name,
+          mediaType
+        )}?query=${encodeURIComponent(job.query)}&page=${p.page}&perPage=${p.perPage}`
+      );
+      data = await res.json();
+    } catch {
+      p.page++;
+      continue;
+    }
+
+    if (!data.items || data.items.length === 0) {
+      p.page++;
+      continue;
+    }
+
+    for (const item of data.items) {
+      if (stopRequested || totalDownloaded >= job.targetCount) break;
+
+      const url = extractUrl(p.name, item);
+      if (!url) continue;
+
+      const ok = await downloadWithRetry(
+        url,
+        buildFilename(job.query, p.name, item, mediaType)
+      );
+
+      if (!ok) {
+        stopRequested = true;
+        await persistState("network-error");
+        chrome.runtime.sendMessage({ type: "PAUSED" });
+        break;
+      }
+
+      totalDownloaded++;
+      p.downloaded++;
+      p.remaining--;
+
+      emitProgress();
+    }
+
+    p.page++;
+    await persistState();
+    await sleep(200);
   }
 
+  isRunning = false;
+
+  if (stopRequested) return;
+
+  await clearState();
   chrome.runtime.sendMessage({ type: "DONE" });
 }
 
-/* ---------- MESSAGING ---------- */
+/* ================= MESSAGING ================= */
 chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
-  if (msg.type === "CREATE_JOB") {
-    currentJob = msg;
-    runJob();
-    sendResponse({ ok: true });
-    return true;
-  }
+  (async () => {
+    if (msg.type === "START_JOB") {
+      if (isRunning) return sendResponse({ ok: false });
 
-  if (msg.type === "CANCEL_JOB") {
-    cancelled = true;
-    sendResponse({ ok: true });
-    return true;
-  }
+      job = msg.job;
+      totalDownloaded = 0;
+      providerIndex = 0;
+
+      const type = normalizeType(job.mediaType);
+      providers = [
+        { name: "pexels", enabled: true, page: 1, perPage: type === "videos" ? 30 : 80, remaining: Infinity, downloaded: 0 },
+        { name: "unsplash", enabled: type === "images", page: 1, perPage: UNSPLASH_PER_PAGE, remaining: UNSPLASH_MAX_PAGES * UNSPLASH_PER_PAGE, downloaded: 0 },
+        { name: "pixabay", enabled: true, page: 1, perPage: type === "videos" ? 50 : 80, remaining: PIXABAY_MAX_ITEMS, downloaded: 0 },
+      ];
+
+      await persistState();
+      run();
+      sendResponse({ ok: true });
+    }
+
+    if (msg.type === "PAUSE_JOB") {
+      if (!isRunning) return sendResponse({ ok: false });
+      stopRequested = true;
+      await persistState("manual");
+      isRunning = false;
+      sendResponse({ ok: true });
+    }
+
+    if (msg.type === "RESUME_JOB") {
+      if (isRunning) return sendResponse({ ok: false });
+
+      const saved = await loadState();
+      if (!saved || saved.status !== "paused") {
+        return sendResponse({ ok: false });
+      }
+
+      ({ job, providers, totalDownloaded, providerIndex } = saved);
+      run();
+      sendResponse({ ok: true });
+    }
+
+    if (msg.type === "STOP_JOB") {
+      stopRequested = true;
+      isRunning = false;
+      await clearState();
+      sendResponse({ ok: true });
+    }
+
+    if (msg.type === "GET_JOB") {
+      const saved = await loadState();
+      sendResponse(saved || null);
+    }
+  })();
+
+  return true;
 });

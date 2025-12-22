@@ -19,11 +19,7 @@
 
     <!-- Search -->
     <div class="search-section">
-      <input
-        id="queryInput"
-        type="text"
-        placeholder="Search stock media (e.g. mountains)"
-      />
+      <input id="queryInput" type="text" placeholder="Search stock media" />
       <button id="searchBtn">Search</button>
     </div>
 
@@ -31,7 +27,7 @@
     <div class="media-type">
       <label>Media type</label>
       <select id="mediaTypeSelect">
-        <option value="images" selected>Images</option>
+        <option value="images">Images</option>
         <option value="videos">Videos</option>
       </select>
     </div>
@@ -45,26 +41,24 @@
 
       <div id="providerResults" class="provider-results"></div>
 
-      <input
-        id="countInput"
-        type="number"
-        min="1"
-        placeholder="How many do you want to download?"
-      />
-
+      <input id="countInput" type="number" min="1" placeholder="How many?" />
       <button id="downloadBtn" disabled>Start Download</button>
     </div>
 
     <!-- Progress -->
     <div id="progressSection" class="hidden">
       <p class="progress-title">Download Progress</p>
-
-      <div id="progressTotal" class="progress-total">—</div>
-
-      <div id="progressProviders" class="progress-providers"></div>
+      <div id="progressTotal">—</div>
+      <div id="progressProviders"></div>
     </div>
 
-    <!-- Status -->
+    <!-- Controls -->
+    <div id="controlSection" class="hidden">
+      <button id="pauseBtn">Pause</button>
+      <button id="stopBtn">Stop</button>
+    </div>
+
+    <!-- Footer -->
     <footer class="footer">
       <span id="statusText">Status: Idle</span>
     </footer>

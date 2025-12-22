@@ -1,9 +1,8 @@
 console.log("POPUP LOADED");
 
 const BACKEND_URL = "https://fetchx-backend.onrender.com";
-//const BACKEND_URL = "http://localhost:3000";
 
-/* DOM */
+/* ===== DOM ===== */
 const queryInput = document.getElementById("queryInput");
 const searchBtn = document.getElementById("searchBtn");
 const mediaTypeSelect = document.getElementById("mediaTypeSelect");
@@ -14,16 +13,68 @@ const maxLimitEl = document.getElementById("maxLimit");
 
 const countInput = document.getElementById("countInput");
 const downloadBtn = document.getElementById("downloadBtn");
-const statusText = document.getElementById("statusText");
 
 const progressSection = document.getElementById("progressSection");
 const progressTotal = document.getElementById("progressTotal");
 const progressProviders = document.getElementById("progressProviders");
 
-/* State */
-let maxDownloadLimit = 0;
+const controlSection = document.getElementById("controlSection");
+const pauseBtn = document.getElementById("pauseBtn");
+const stopBtn = document.getElementById("stopBtn");
 
-/* Search */
+const statusText = document.getElementById("statusText");
+
+/* ===== UI HELPERS ===== */
+function showIdleUI() {
+  progressSection.classList.add("hidden");
+  controlSection.classList.add("hidden");
+  statusText.textContent = "Status: Idle";
+}
+
+function renderRunning(snapshot) {
+  progressSection.classList.remove("hidden");
+  controlSection.classList.remove("hidden");
+  pauseBtn.textContent = "Pause";
+  statusText.textContent = "Status: Downloading...";
+  renderProgress(snapshot);
+}
+
+function renderPaused(snapshot) {
+  progressSection.classList.remove("hidden");
+  controlSection.classList.remove("hidden");
+  pauseBtn.textContent = "Resume";
+  statusText.textContent =
+    snapshot.pauseReason === "network-error"
+      ? "Status: Paused (Network error)"
+      : "Status: Paused";
+  renderProgress(snapshot);
+}
+
+function renderProgress(snapshot) {
+  progressTotal.textContent = `Total: ${snapshot.totalDownloaded}/${snapshot.job.targetCount}`;
+  progressProviders.innerHTML = "";
+  snapshot.providers.forEach((p) => {
+    const div = document.createElement("div");
+    div.textContent = `${p.name}: ${p.downloaded} downloaded (${p.remaining} left)`;
+    progressProviders.appendChild(div);
+  });
+}
+
+/* ===== INIT ===== */
+chrome.runtime.sendMessage({ type: "GET_JOB" }, (snapshot) => {
+  if (!snapshot || !snapshot.job) {
+    showIdleUI();
+    return;
+  }
+
+  if (snapshot.status === "paused") {
+    renderPaused(snapshot);
+  } else {
+    renderRunning(snapshot);
+  }
+});
+
+/* ===== SEARCH ===== */
 async function handleSearch() {
   const query = queryInput.value.trim();
   const type = mediaTypeSelect.value;
@@ -31,11 +82,8 @@ async function handleSearch() {
 
   statusText.textContent = "Status: Searching...";
   searchBtn.disabled = true;
-  resultsSection.classList.add("hidden");
-  progressSection.classList.add("hidden");
   providerResults.innerHTML = "";
-  countInput.value = "";
-  downloadBtn.disabled = true;
+  resultsSection.classList.add("hidden");
 
   try {
     const res = await fetch(
@@ -43,80 +91,88 @@ async function handleSearch() {
     );
     const data = await res.json();
 
-    maxDownloadLimit = data.maxDownloadLimit || 0;
-    maxLimitEl.textContent = maxDownloadLimit.toLocaleString();
+    maxLimitEl.textContent = data.maxDownloadLimit;
+    providerResults.innerHTML = "";
 
     Object.entries(data.providers).forEach(([name, info]) => {
       const row = document.createElement("div");
       row.className = "provider-row";
-
-      row.innerHTML = `
-        <span>${name.charAt(0).toUpperCase() + name.slice(1)}</span>
-        <span>${
-          info.available !== info.usable
-            ? `${info.available.toLocaleString()} (usable: ${info.usable.toLocaleString()})`
-            : info.available.toLocaleString()
-        }</span>
-      `;
-
+      row.innerHTML = `<span>${name}</span><span>${info.usable}</span>`;
       providerResults.appendChild(row);
     });
 
     resultsSection.classList.remove("hidden");
     statusText.textContent = "Status: Ready";
-  } catch (e) {
+  } catch {
     statusText.textContent = "Status: Search failed";
   } finally {
     searchBtn.disabled = false;
   }
 }
 
-/* Count input */
+/* ===== COUNT ===== */
 countInput.addEventListener("input", () => {
-  let v = Number(countInput.value);
-  if (v > maxDownloadLimit) {
-    countInput.value = maxDownloadLimit;
-    v = maxDownloadLimit;
-  }
-  downloadBtn.disabled = !(v > 0 && v <= maxDownloadLimit);
+  const v = Number(countInput.value);
+  downloadBtn.disabled = !(v > 0);
 });
 
-/* Download */
+/* ===== START ===== */
 downloadBtn.addEventListener("click", () => {
-  const targetCount = Number(countInput.value);
+  const job = {
+    query: queryInput.value.trim(),
+    mediaType: mediaTypeSelect.value,
+    targetCount: Number(countInput.value),
+  };
 
-  chrome.runtime.sendMessage(
-    {
-      type: "CREATE_JOB",
-      query: queryInput.value.trim(),
-      mediaType: mediaTypeSelect.value,
-      targetCount,
-    },
-    () => {
+  chrome.runtime.sendMessage({ type: "START_JOB", job }, (res) => {
+    if (res?.ok) {
       statusText.textContent = "Status: Downloading...";
+      pauseBtn.textContent = "Pause";
+      controlSection.classList.remove("hidden");
       progressSection.classList.remove("hidden");
     }
-  );
+  });
 });
 
-/* Progress listener */
+/* ===== PAUSE / RESUME ===== */
+pauseBtn.addEventListener("click", () => {
+  if (pauseBtn.textContent === "Pause") {
+    chrome.runtime.sendMessage({ type: "PAUSE_JOB" });
+  } else {
+    chrome.runtime.sendMessage({ type: "RESUME_JOB" });
+  }
+});
+
+/* ===== STOP ===== */
+stopBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "STOP_JOB" }, () => {
+    showIdleUI();
+  });
+});
+
+/* ===== LIVE UPDATES ===== */
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "PROGRESS") {
     progressTotal.textContent = `Total: ${msg.downloaded}/${msg.target}`;
     progressProviders.innerHTML = "";
-
     Object.entries(msg.providers).forEach(([name, p]) => {
-      const row = document.createElement("div");
-      row.textContent = `${name}: ${p.downloaded} downloaded (${p.remaining} left)`;
-      progressProviders.appendChild(row);
+      const div = document.createElement("div");
+      div.textContent = `${name}: ${p.downloaded} downloaded (${p.remaining} left)`;
+      progressProviders.appendChild(div);
     });
   }
 
+  if (msg.type === "PAUSED") {
+    pauseBtn.textContent = "Resume";
+    statusText.textContent = "Status: Paused";
+  }
+
   if (msg.type === "DONE") {
+    showIdleUI();
     statusText.textContent = "Status: Completed 🎉";
   }
 });
 
-/* Events */
+/* ===== EVENTS ===== */
 searchBtn.addEventListener("click", handleSearch);
 queryInput.addEventListener("keydown", (e) => e.key === "Enter" && handleSearch());
