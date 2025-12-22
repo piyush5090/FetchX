@@ -1,7 +1,7 @@
 console.log("POPUP LOADED");
 
-// const BACKEND_URL = "https://fetchx-backend.onrender.com";
-const BACKEND_URL = "http://localhost:3000";
+const BACKEND_URL = "https://fetchx-backend.onrender.com";
+//const BACKEND_URL = "http://localhost:3000";
 
 /* DOM */
 const queryInput = document.getElementById("queryInput");

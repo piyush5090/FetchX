@@ -1,29 +1,21 @@
 {
   "manifest_version": 3,
   "name": "FetchX",
-  "description": "Download stock media at scale",
-  "version": "0.1.0",
-
+  "version": "1.0",
   "action": {
     "default_popup": "popup/popup.html"
   },
-
   "background": {
-    "service_worker": "background/worker.js",
-    "type": "module"
+    "service_worker": "background/worker.js"
   },
-
   "permissions": [
+    "downloads",
     "storage",
-    "downloads"
+    "offscreen"
   ],
-
   "host_permissions": [
-    "https://fetchx-backend.onrender.com/*",
-    "https://*.pexels.com/*",
-    "https://*.unsplash.com/*"
+    "<all_urls>"
   ],
-
   "icons": {
     "16": "assets/icon.png",
     "48": "assets/icon.png",
