@@ -3,6 +3,8 @@ console.log("POPUP LOADED");
 const BACKEND_URL = "https://fetchx-backend.onrender.com";
 
 /* ===== DOM ===== */
+let currentStatus = "idle";
+
 const queryInput = document.getElementById("queryInput");
 const searchBtn = document.getElementById("searchBtn");
 const mediaTypeSelect = document.getElementById("mediaTypeSelect");
@@ -51,14 +53,19 @@ function renderPaused(snapshot) {
 }
 
 function renderProgress(snapshot) {
-  progressTotal.textContent = `Total: ${snapshot.totalDownloaded}/${snapshot.job.targetCount}`;
+  progressTotal.textContent =
+    `Total: ${snapshot.totalDownloaded}/${snapshot.job.targetCount}`;
+
   progressProviders.innerHTML = "";
-  snapshot.providers.forEach((p) => {
+
+  Object.entries(snapshot.providers).forEach(([name, p]) => {
     const div = document.createElement("div");
-    div.textContent = `${p.name}: ${p.downloaded} downloaded (${p.remaining} left)`;
+    div.textContent =
+      `${name}: ${p.downloaded} downloaded`;
     progressProviders.appendChild(div);
   });
 }
+
 
 /* ===== INIT ===== */
 chrome.runtime.sendMessage({ type: "GET_JOB" }, (snapshot) => {
@@ -152,15 +159,32 @@ stopBtn.addEventListener("click", () => {
 
 /* ===== LIVE UPDATES ===== */
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "PROGRESS") {
-    progressTotal.textContent = `Total: ${msg.downloaded}/${msg.target}`;
-    progressProviders.innerHTML = "";
-    Object.entries(msg.providers).forEach(([name, p]) => {
-      const div = document.createElement("div");
-      div.textContent = `${name}: ${p.downloaded} downloaded (${p.remaining} left)`;
-      progressProviders.appendChild(div);
-    });
+  if (msg.type === "RUNNING") {
+    renderRunning(msg.snapshot);
   }
+
+  if (msg.type === "PROGRESS") {
+  // 🔥 DO NOTHING if paused
+  if (currentStatus === "paused") return;
+
+  currentStatus = "running";
+
+  pauseBtn.textContent = "Pause";
+  statusText.textContent = "Status: Downloading...";
+
+  progressTotal.textContent =
+    `Total: ${msg.downloaded}/${msg.target}`;
+
+  progressProviders.innerHTML = "";
+  Object.entries(msg.providers).forEach(([name, p]) => {
+    const div = document.createElement("div");
+    div.textContent =
+      `${name}: ${p.downloaded} downloaded`;
+    progressProviders.appendChild(div);
+  });
+}
+
+
 
   if (msg.type === "PAUSED") {
     pauseBtn.textContent = "Resume";

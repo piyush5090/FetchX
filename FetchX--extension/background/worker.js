@@ -11,31 +11,18 @@ const UNSPLASH_PER_PAGE = 30;
 const PIXABAY_MAX_ITEMS = 500;
 
 /* ================= STATE ================= */
-let job = null;
-let providers = [];
-let totalDownloaded = 0;
-
-let stopRequested = false;
+let state = null;
 let isRunning = false;
-let providerIndex = 0;
+let stopRequested = false;
 
 /* ================= HELPERS ================= */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ================= STORAGE ================= */
-async function persistState(reason = null) {
-  if (!job) return;
-
+async function saveState() {
+  if (!state) return;
   await chrome.storage.session.set({
-    [STORAGE_KEY]: {
-      job: structuredClone(job),
-      providers: structuredClone(providers),
-      totalDownloaded,
-      status: stopRequested ? "paused" : "running",
-      pauseReason: reason,
-      providerIndex,
-      savedAt: Date.now(),
-    },
+    [STORAGE_KEY]: structuredClone(state),
   });
 }
 
@@ -112,156 +99,209 @@ async function downloadWithRetry(url, filename) {
 
 /* ================= PROGRESS ================= */
 function emitProgress() {
-  chrome.runtime.sendMessage({
-    type: "PROGRESS",
-    downloaded: totalDownloaded,
-    target: job.targetCount,
-    providers: Object.fromEntries(
-      providers.map((p) => [
-        p.name,
-        { downloaded: p.downloaded, remaining: p.remaining },
-      ])
-    ),
-  });
+  if (!state) return;
+  if (state.status !== "running") return; // 🔥 HARD GUARD
+
+  chrome.runtime.sendMessage(
+    {
+      type: "PROGRESS",
+      downloaded: state.totalDownloaded,
+      target: state.job.targetCount,
+      providers: state.providers,
+    },
+    () => {
+      if (chrome.runtime.lastError) {}
+    }
+  );
 }
 
 /* ================= MAIN LOOP ================= */
 async function run() {
-  if (isRunning || !job) return;
+  if (isRunning || !state) return;
 
   isRunning = true;
   stopRequested = false;
 
-  const mediaType = normalizeType(job.mediaType);
-  await persistState();
+  const mediaType = normalizeType(state.job.mediaType);
 
-  while (totalDownloaded < job.targetCount && !stopRequested) {
-    const activeProviders = providers.filter(
-      (p) => p.enabled && p.remaining > 0
-    );
+  while (
+    state &&
+    state.status === "running" &&
+    state.totalDownloaded < state.job.targetCount &&
+    !stopRequested
+  ) {
+    const providerName = state.currentProvider;
+    const p = state.providers[providerName];
 
-    if (activeProviders.length === 0) break;
+    /* Move to next provider if exhausted */
+    if (p.exhausted) {
+      if (providerName === "unsplash") state.currentProvider = "pixabay";
+      else if (providerName === "pixabay") state.currentProvider = "pexels";
+      else break;
 
-    const p = providers[providerIndex % providers.length];
-    providerIndex = (providerIndex + 1) % providers.length;
-
-    if (!p.enabled || p.remaining <= 0) continue;
-
-    // HARD CAPS
-    if (p.name === "unsplash" && p.page > UNSPLASH_MAX_PAGES) {
-      p.enabled = false;
+      await saveState();
       continue;
     }
 
-    if (p.name === "pixabay" && p.downloaded >= PIXABAY_MAX_ITEMS) {
-      p.enabled = false;
+    /* HARD CAPS */
+    if (providerName === "unsplash" && p.page > UNSPLASH_MAX_PAGES) {
+      p.exhausted = true;
+      await saveState();
+      continue;
+    }
+
+    if (providerName === "pixabay" && p.downloaded >= PIXABAY_MAX_ITEMS) {
+      p.exhausted = true;
+      await saveState();
       continue;
     }
 
     let data;
     try {
       const res = await fetch(
-        `${BACKEND_URL}/metadata/${p.name}/${resolveRoute(
-          p.name,
+        `${BACKEND_URL}/metadata/${providerName}/${resolveRoute(
+          providerName,
           mediaType
-        )}?query=${encodeURIComponent(job.query)}&page=${p.page}&perPage=${p.perPage}`
+        )}?query=${encodeURIComponent(state.job.query)}&page=${p.page}&perPage=${p.perPage}`
       );
       data = await res.json();
     } catch {
       p.page++;
+      await saveState();
       continue;
     }
 
     if (!data.items || data.items.length === 0) {
-      p.page++;
+      p.exhausted = true;
+      await saveState();
       continue;
     }
 
     for (const item of data.items) {
-      if (stopRequested || totalDownloaded >= job.targetCount) break;
+      if (
+        stopRequested ||
+        !state ||
+        state.status !== "running" ||
+        state.totalDownloaded >= state.job.targetCount
+      ) {
+        break;
+      }
 
-      const url = extractUrl(p.name, item);
+      const url = extractUrl(providerName, item);
       if (!url) continue;
 
       const ok = await downloadWithRetry(
         url,
-        buildFilename(job.query, p.name, item, mediaType)
+        buildFilename(state.job.query, providerName, item, mediaType)
       );
 
       if (!ok) {
-        stopRequested = true;
-        await persistState("network-error");
+        state.status = "paused";
+        await saveState();
         chrome.runtime.sendMessage({ type: "PAUSED" });
-        break;
+        isRunning = false;
+        return;
       }
 
-      totalDownloaded++;
+      /* SUCCESS */
+      state.totalDownloaded++;
       p.downloaded++;
-      p.remaining--;
 
       emitProgress();
+      await saveState(); // 🔥 CRITICAL
     }
 
     p.page++;
-    await persistState();
+    await saveState();
     await sleep(200);
   }
 
   isRunning = false;
 
-  if (stopRequested) return;
+  if (!state) return;
 
-  await clearState();
-  chrome.runtime.sendMessage({ type: "DONE" });
+  if (state.totalDownloaded >= state.job.targetCount) {
+    state.status = "done";
+    await saveState();
+    chrome.runtime.sendMessage({ type: "DONE" });
+  }
 }
 
 /* ================= MESSAGING ================= */
 chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
   (async () => {
     if (msg.type === "START_JOB") {
-      if (isRunning) return sendResponse({ ok: false });
+      state = {
+        status: "running",
+        job: msg.job,
+        totalDownloaded: 0,
+        currentProvider: "unsplash",
+        providers: {
+          unsplash: {
+            page: 1,
+            perPage: UNSPLASH_PER_PAGE,
+            downloaded: 0,
+            exhausted: false,
+          },
+          pixabay: {
+            page: 1,
+            perPage:
+              msg.job.mediaType === "videos" ? 50 : 80,
+            downloaded: 0,
+            exhausted: false,
+          },
+          pexels: {
+            page: 1,
+            perPage:
+              msg.job.mediaType === "videos" ? 30 : 80,
+            downloaded: 0,
+            exhausted: false,
+          },
+        },
+      };
 
-      job = msg.job;
-      totalDownloaded = 0;
-      providerIndex = 0;
-
-      const type = normalizeType(job.mediaType);
-      providers = [
-        { name: "pexels", enabled: true, page: 1, perPage: type === "videos" ? 30 : 80, remaining: Infinity, downloaded: 0 },
-        { name: "unsplash", enabled: type === "images", page: 1, perPage: UNSPLASH_PER_PAGE, remaining: UNSPLASH_MAX_PAGES * UNSPLASH_PER_PAGE, downloaded: 0 },
-        { name: "pixabay", enabled: true, page: 1, perPage: type === "videos" ? 50 : 80, remaining: PIXABAY_MAX_ITEMS, downloaded: 0 },
-      ];
-
-      await persistState();
+      await saveState();
       run();
       sendResponse({ ok: true });
     }
 
     if (msg.type === "PAUSE_JOB") {
-      if (!isRunning) return sendResponse({ ok: false });
-      stopRequested = true;
-      await persistState("manual");
-      isRunning = false;
-      sendResponse({ ok: true });
-    }
+  if (!state) return sendResponse({ ok: false });
+
+  state.status = "paused";
+  stopRequested = true;
+  await saveState();
+
+  chrome.runtime.sendMessage({
+    type: "PAUSED",
+    snapshot: state
+  });
+
+  sendResponse({ ok: true });
+}
+
 
     if (msg.type === "RESUME_JOB") {
-      if (isRunning) return sendResponse({ ok: false });
-
-      const saved = await loadState();
-      if (!saved || saved.status !== "paused") {
+      if (!state || state.status !== "paused")
         return sendResponse({ ok: false });
-      }
 
-      ({ job, providers, totalDownloaded, providerIndex } = saved);
+      state.status = "running";
+      stopRequested = false;
+      await saveState();
+
+      chrome.runtime.sendMessage({
+        type: "RUNNING",
+        snapshot: state
+      });
+
       run();
       sendResponse({ ok: true });
     }
 
     if (msg.type === "STOP_JOB") {
       stopRequested = true;
-      isRunning = false;
       await clearState();
+      state = null;
       sendResponse({ ok: true });
     }
 
