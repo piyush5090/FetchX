@@ -16,6 +16,7 @@ app.use(
       "https://fetchx-backend.onrender.com",
       /^chrome-extension:\/\//,
       "http://localhost:5173",
+      "https://nexus-ten-green.vercel.app",
     ],
   })
 );
