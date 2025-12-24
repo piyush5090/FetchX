@@ -15,6 +15,7 @@ app.use(
       "http://localhost:3000",
       "https://fetchx-backend.onrender.com",
       /^chrome-extension:\/\//,
+      "http://localhost:5173",
     ],
   })
 );
